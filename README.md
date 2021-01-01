@@ -54,6 +54,8 @@ When programming the Lumibaer, first power the device using the power supply, th
 
 The holder is 3D-printed from white PLA on a Flashforge Finder. You can find the design at [onshape.com](https://cad.onshape.com/documents/3edbe17af1ac7154b36a21e5/w/be9cdfd852b25ba857e68c3f/e/f320dc2e18de69cdc695974b), the STL is also part of this repository. 
 
+![Holder for Lumibaer](Holder.png "isoscale rendering of the holder from onshape")
+
 Make sure that your printer's tolerances match your parts. In order to do this, print some prototypes to see, if:
 
 1) The part fits on the metal rods holding it inside the Lumibär. Print the lowest 1cm of the model. 
@@ -61,8 +63,15 @@ Make sure that your printer's tolerances match your parts. In order to do this, 
 
 Only then print the full model
 
+If you need to change it, here are some hints:
 
+* The size of the holes (where the metal rods go) is in "Skizze 1"
+* The circles defining the shape, where the Neopixel-rings go are defined in "Skizze 7".
+* Also check that the NanoESP fits into the middle (see below)
 
+# Assembly Instructions
+
+The holder features two 
 
 
 
