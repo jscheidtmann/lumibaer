@@ -95,9 +95,19 @@ In order to be able to upload sketches to the NanoESP, I had to choose Board "Ar
 
 Then open and run the "strandtest" example from File -> Examples -> Adafruit NeoPixel. It should work out of the box. If it doesn't, check if the D_IN is connected to the right pin in the Arduino. You can then open the "test.ino" sketch from this project. It is basically a modified version of the strandtest program, which in addition switches the onboard LED, whenever the button switch is pressed and reorders the leds in the strip to make it easier to program later on. Check that the front ring is run through clockwise and back ring is run through conter clockwise. If that is not the case, check `pinTranslate()`.
 
-If all is working well, upload the `lumibaer.ino` sketch.
+If all is working well, define your network credentials in `credentials.h` and then compile and upload the `lumibaer.ino` sketch.
 
 # Manual
+
+## Initial State
+
+When the Lumibär is connected to power, it tries to connect to the local WiFi, that you configured. If this is successful, the Lumibär flashes once in green. If it was unsuccessful, it flashes once in red. 
+
+## Using the button
+
+Pressing the button shortly switches the Lumibär on or off. The initial color is White (at full brightness). 
+When switching on, hold the button and the Lumibär will cycle through colors. Just release the button, if the color is to your liking. After a color is selected, press the button shortly to switch the Lumibär on or off.
+
 
 
 
