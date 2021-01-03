@@ -82,6 +82,8 @@ NanoESP_HTTP http = NanoESP_HTTP(nanoesp);
 // This is a prime on purpose.
 #define SINGLE_INCREMENT 51
 
+#define ROTATE_WAIT 300
+
 // Globals -----------------------------------------------------------------
 
 /**
@@ -112,6 +114,10 @@ uint32_t single_color = 0;
 
 uint32_t front_color = 0;
 uint32_t back_color = 0;
+
+uint32_t left_color = 0;
+uint32_t right_color = 0;
+int rotate = 0;
 
 /**
  * Which color is selected for Single color mode?
@@ -260,10 +266,10 @@ void loop() {
     debug("recv:"); debug(request);
     if (request.startsWith(F(":on"))) {
       lumibaer_state = true;
-      debug(F("Set ON!"));
+      // debug(F("Set ON!"));
     } else if (request.startsWith(F(":off"))) {
       lumibaer_state = false;
-      debug(F("Set OFF!"));
+      // debug(F("Set OFF!"));
     } else if (request.startsWith(F(":brightness?"))) {
       debug(F("brightness"));
       int brightness = strtol(request.substring(12).c_str(), NULL, 10);
@@ -272,10 +278,10 @@ void loop() {
       strip.setBrightness(brightness);
     } else if (request.startsWith(F(":toggle"))) {
       lumibaer_state = !lumibaer_state;
-      debug(F("Toggle!"));
+      // debug(F("Toggle!"));
     } else if (request.startsWith(F(":color?"))) {
       lumibaer_mode = MODE_SINGLE_COLOR;
-      debug(request.substring(7,13));
+      // debug(request.substring(7,13));
       uint32_t color = strtoul(request.substring(7,13).c_str(),NULL, 16);
       lumibaer_state = true;
       single_color = color;
@@ -283,15 +289,33 @@ void loop() {
     } else if (request.startsWith(F(":two?"))) {
       lumibaer_mode = MODE_TWO_COLOR;
       lumibaer_state = true;
-      debug(F("TWO"));
-      debug(request.substring(5,11));
-      debug(request.substring(12,18));
+      // debug(F("TWO"));
+      // debug(request.substring(5,11));
+      // debug(request.substring(12,18));
       front_color = strtoul(request.substring(5, 11).c_str(), NULL, 16);
       back_color = strtoul(request.substring(12,18).c_str(), NULL, 16);
+    } else if (request.startsWith(F(":rotate?"))) {
+      lumibaer_mode = MODE_ROTATE_TWO;
+      lumibaer_state = true;
+      left_color = strtoul(request.substring(5, 11).c_str(), NULL, 16);
+      right_color = strtoul(request.substring(12,18).c_str(), NULL, 16);
     }
     synchronizeStrip();
   }
-  
+
+  switch (lumibaer_mode) {
+    case MODE_ROTATE_TWO: 
+      static unsigned long last_rotate = 0L;
+      if ((now - last_rotate) > ROTATE_WAIT) {
+        last_rotate = now;
+        rotate++;
+      }
+      synchronizeStrip();
+      break;
+    default: 
+      ; // No Op
+      break;
+  }
   // */
   /*
   // Serial Monitor passes stuff through to the ESP.
@@ -462,6 +486,11 @@ void synchronizeStrip() {
         debug(String(front_color, 16));
         debug(String(back_color, 16)); 
         setTwoColors(front_color, back_color); 
+        break;
+      case MODE_ROTATE_TWO:
+        debug("Rotate");
+        // TODO
+        setSingleColor(strip.Color(128,0,255));
         break;
       default: 
         debug("other");
