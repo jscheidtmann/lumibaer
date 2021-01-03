@@ -200,14 +200,11 @@ void loop() {
   
   if (buttonDownDetected(now)) {
     // Handle button press (on/off)
-    lumibaer_mode = MODE_SINGLE_COLOR;
     lumibaer_state = !lumibaer_state; // toggle on/off
     synchronizeStrip();
   }
   
-  if (longPressDetected(now)) {
-    // On Long Press, change color (can only be true, if lumibaer is on)
-    lumibaer_mode = MODE_SINGLE_COLOR;
+  if (longPressDetected(now) && lumibaer_mode == MODE_SINGLE_COLOR) {
     single_hue += SINGLE_INCREMENT;
     single_color = strip.gamma32(strip.ColorHSV(single_hue));
     synchronizeStrip();
