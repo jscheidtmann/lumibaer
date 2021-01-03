@@ -2,7 +2,7 @@
  * Lumibaer
  * 
  * Copyright (C) 2021 Jens Scheidtmann (jscheidtmann)
- * This software is free software and available under a "Modified BSD license", see LICENSE.
+ * This software is free software and available under a "Modified BSD license" (3-Clause BSD), see LICENSE.
  * 
  * 
  */
@@ -29,7 +29,7 @@ Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 //   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
 
 /**
- * Translate the pin 
+ * Translate pin 
  */
 int pinTranslate(int pin) {
   const int translation [] = { 
@@ -47,12 +47,15 @@ int pinTranslate(int pin) {
 
 // ESP WiFi / Server Lib ---------------------------------------------------
 
+// This is the library supplied by F. Kainka with the Pretzel Board. It is rather old and HTTP is rather limited.
 #include <NanoESP.h>
 #include <NanoESP_HTTP.h>
 
+// This is the library distributed via 
+
 /**
- * define two constants: 
- * SSID 
+ * define two string constants: 
+ * WIFI = SSID of your router 
  * PASSWORD
  */
 #include "credentials.h"
@@ -68,13 +71,15 @@ NanoESP_HTTP http = NanoESP_HTTP(nanoesp);
 // The switch button is connected to which pin?
 #define SWITCH 7
 
-// Change must be detected this many milliseconds at least.
+// Switch Press must be detected this many milliseconds at least, to count as press.
 #define SWITCH_THRESHOLD 50 
 
 // Long press must be at least this long
-// (at least two times SWITCH_THRESHOLD, see buttonDownDetected() )
-#define SWITCH_LONGTHRESHOLD 1000
+// (should be at least two times SWITCH_THRESHOLD, see buttonDownDetected() )
+#define SWITCH_LONGTHRESHOLD 2000
 
+// Increment applied, when changing colors. 
+// This is a prime on purpose.
 #define SINGLE_INCREMENT 51
 
 // Globals -----------------------------------------------------------------
@@ -85,7 +90,7 @@ NanoESP_HTTP http = NanoESP_HTTP(nanoesp);
 boolean debug_out = true;
 
 /**
- * last time, a state change was detected
+ * last time, a button down was detected
  * 
  * This variable is used to detect user interactions (presses of the button)
  */
@@ -100,28 +105,47 @@ boolean button_state = false;
 
 /**
  * Color that is displayed in single mode
+ * 
+ * Use strip.Color(R,G,B) or relatives
  */
 uint32_t single_color = 0;
 
-/**
- * Is it on or off?
- */
-boolean single_state = false;
+uint32_t front_color = 0;
+uint32_t back_color = 0;
 
 /**
  * Which color is selected for Single color mode?
+ * 
+ * when running through colors, ie. button is pressed. long.
  */
 uint16_t single_hue = 0;
 
+/**
+ * The different modes supported by the Lumibaer software.
+ */
 enum modes {
-  MODE_SINGLE_COLOR, 
-  MODE_SINGLE_COLOR_SELECT, 
-  MODE_SINGLE_COLOR_BRIGHTNESS,
-  MODE_TWO_COLOR,
+  MODE_SINGLE_COLOR, // Show one color perpetually
+  MODE_TWO_COLOR,  // Show different color on front and back.
   MODE_SWEEP, 
+  MODE_ROTATE_TWO,
   MODE_LIGHTHOUSE,
   MODE_UNKNOWN
 } lumibaer_mode = MODE_SINGLE_COLOR;
+
+/**
+ * Is Lumibär on or off?
+ * 
+ * For ALL modes
+ */
+boolean lumibaer_state = false;
+
+// Network state -----------------------------------------------------------
+
+boolean wifi_check_enabled = true;
+
+boolean wifi_available = false;
+
+boolean udp_server_running = false;
 
 // setup() function -- runs once at startup --------------------------------
 
@@ -138,6 +162,7 @@ void setup() {
 
   // Set Default Color
   single_color = strip.Color(255,255,255); // White
+  lumibaer_mode = MODE_SINGLE_COLOR;
 
   // Setup Serial
   if (debug_out) {
@@ -148,22 +173,21 @@ void setup() {
   boolean setup_ok = true;
   
   // Setup ESP
-  nanoesp.init();
+  setup_ok = setup_ok && nanoesp.init();
 
-  //Connect to WiFi, start WebServer.
-  setup_ok = nanoesp.configWifi(STATION, SSID, PASSWORD);
-  if (setup_ok) {
-    setup_ok = nanoesp.startTcpServer(80);
-  }
+  // Per default the ESP will connect to the WiFi once configured. 
+  // It will take some time though. So setting it up is postponed to the loop.
+  // In order to give an "immediately ready" feeling for the users.
+  //
+  // I tried waiting up to two seconds here, but it seems it can take longer.   
 
   // Indicate state of setup 
   if (setup_ok) { // If successful, blink ...
-    colorFlash(strip.Color(0, 255, 0), 200); // Green
-    debug(nanoesp.getIp());
-    debug("Setup: Ok");
+    colorFlash(strip.Color(0, 0, 255), 200); // Blue is ok (for color blind)
+    debug(F("Setup: Ok"));
   } else {
-    colorFlash(strip.Color(255, 0, 0), 200); // Red
-    debug("Setup: FAILED.");
+    colorFlash(strip.Color(255, 0, 0), 200); // Red is bad
+    debug(F("Setup: FAILED."));
   }
 }
 
@@ -177,40 +201,111 @@ void loop() {
   if (buttonDownDetected(now)) {
     // Handle button press (on/off)
     lumibaer_mode = MODE_SINGLE_COLOR;
-    single_state = !single_state; // toggle on/off
-    if (single_state) {
-      setSingleColor(single_color);
-    } else {
-      setSingleColor(strip.Color(0,0,0)); // off
-    }
-    strip.show();
+    lumibaer_state = !lumibaer_state; // toggle on/off
+    synchronizeStrip();
   }
   
   if (longPressDetected(now)) {
-    // On Long Press, change color.
+    // On Long Press, change color (can only be true, if lumibaer is on)
     lumibaer_mode = MODE_SINGLE_COLOR;
-    single_color = strip.gamma32(strip.ColorHSV(single_hue));
     single_hue += SINGLE_INCREMENT;
-    setSingleColor(single_color);
-    strip.show();
+    single_color = strip.gamma32(strip.ColorHSV(single_hue));
+    synchronizeStrip();
     delay(10);
   } 
 
-  // Receive a http get request.
-  /*
-  String method, ressource, parameter;
-  int id;
-
-  if (http.recvRequest(id, method, ressource, parameter)) { 
-    //Incoming request, parameters by reference
-    
-    debug("New Request from id :" + String(id) + ", method: " + method +  ", ressource: " + ressource +  " parameter: " + parameter);
-
-    String webpage = "<h1>Hello World!";
-    nanoesp.sendData(id, webpage);
-  }
-  */
+  // Make onboard LED reflect button state.
   onboardLedSwitch();
+
+  // Try setting up the WiFi (once a second)
+  static unsigned long last_check = 0L;
+  static int wifi_check_count = 0;
+  
+  if (wifi_check_enabled && (now - last_check) > 1000L) {
+    wifi_check_count++;
+    String response = nanoesp.getIp();
+    if (-1 == response.indexOf("0.0.0.0")) {
+      wifi_check_enabled = false;
+      wifi_available = true;
+      debug(response);
+      debug(String(wifi_check_count));
+      colorFlash(strip.Color(0, 255, 0), 50); // Green
+    } else {
+      last_check = now;
+      if (wifi_check_count > 10) {
+        colorFlash(strip.Color(0,255,255), 50); // yellow
+        // connect to WiFi
+        nanoesp.configWifi(STATION, WIFI, PASSWORD);
+        // Enable Autoconnection (saves to ESP flash). 
+        // Once done, it should auto set up, during the 10 seconds wait time,
+        // so we never get here again.
+        nanoesp.sendCom("AT+CWAUTOCONN=1"); 
+        wifi_check_count = 0;
+      } else {
+        colorFlash(strip.Color(255,0,0), 50); // Red
+      }
+    }
+  }
+
+  if (wifi_available && !udp_server_running) {
+    if (nanoesp.startUdpServer(0,"192.168.178.255", 8888,8888,2)) {
+      udp_server_running = true;
+      debug(F("UDP server started."));
+    } else {
+      debug(F("FAILURE starting UDP server."));
+    }
+  }
+
+  // / *
+  int client, len; 
+  while (nanoesp.recvData(client, len)) {
+    String request = nanoesp.readString();
+    debug("recv:"); debug(request);
+    if (request.startsWith(F(":on"))) {
+      lumibaer_state = true;
+      debug(F("Set ON!"));
+    } else if (request.startsWith(F(":off"))) {
+      lumibaer_state = false;
+      debug(F("Set OFF!"));
+    } else if (request.startsWith(F(":brightness?"))) {
+      debug(F("brightness"));
+      int brightness = strtol(request.substring(12).c_str(), NULL, 10);
+      if (brightness < 0) brightness = 0;
+      if (brightness > 255) brightness = 255;
+      strip.setBrightness(brightness);
+    } else if (request.startsWith(F(":toggle"))) {
+      lumibaer_state = !lumibaer_state;
+      debug(F("Toggle!"));
+    } else if (request.startsWith(F(":color?"))) {
+      lumibaer_mode = MODE_SINGLE_COLOR;
+      debug(request.substring(7,13));
+      uint32_t color = strtoul(request.substring(7,13).c_str(),NULL, 16);
+      lumibaer_state = true;
+      single_color = color;
+      debug(F("Single color set"));
+    } else if (request.startsWith(F(":two?"))) {
+      lumibaer_mode = MODE_TWO_COLOR;
+      lumibaer_state = true;
+      debug(F("TWO"));
+      debug(request.substring(5,11));
+      debug(request.substring(12,18));
+      front_color = strtoul(request.substring(5, 11).c_str(), NULL, 16);
+      back_color = strtoul(request.substring(12,18).c_str(), NULL, 16);
+    }
+    synchronizeStrip();
+  }
+  
+  // */
+  /*
+  // Serial Monitor passes stuff through to the ESP.
+  while (Serial.available()) {
+    nanoesp.write(Serial.read());
+    delay(10);
+  } 
+  while (nanoesp.available()) {
+    Serial.write(nanoesp.read());
+  } 
+  */
 }
 
 // State bearing functions -------------------------------------------------
@@ -256,6 +351,7 @@ boolean buttonDownDetected(unsigned long now) {
       // We have run through threshold, then start dead time
       last_changetime = now; 
       dead_time = true;
+      debug(F("start dead time"));
       return val;
     } 
   }
@@ -273,8 +369,19 @@ boolean buttonDownDetected(unsigned long now) {
   return false;
 }
 
+/**
+ * Detect a long press of the button
+ * 
+ * Returns: 
+ * - false, if Lumibär is off,
+ * - true, if the button was pressed at beginning and end of a SWITCH_LONGTHRESHOLD period, 
+ * - false otherwise.
+ * 
+ * A button press triggers a wait period, that returns false always. 
+ * If the button is (still) pressed at the end of the wait, returns true.
+ */
 boolean longPressDetected(unsigned long now) {
-  if (!single_state) {
+  if (!lumibaer_state) {
     return false;
   }
   
@@ -295,7 +402,7 @@ boolean longPressDetected(unsigned long now) {
       if (first) { // Trigger Threshold
         last_time = now;
         first = false;
-        debug("First false");
+        // debug("First false");
         return false;
       }
     } else {
@@ -341,6 +448,39 @@ void onboardLedSwitch() {
 // Functions dealing with the color strip ----------------------------------
 
 /**
+ * Make strip reflect the internal lumibaer_state.
+ */
+void synchronizeStrip() {
+  debug(F("synchronizeStrip"));
+  debug(String(lumibaer_mode));
+  if (lumibaer_state) {
+    switch (lumibaer_mode) {
+      case MODE_SINGLE_COLOR: 
+        debug("Single");
+        debug(String(single_color));
+        setSingleColor(single_color); 
+        break;
+      case MODE_TWO_COLOR:
+        debug("Two");
+        debug(String(front_color, 16));
+        debug(String(back_color, 16)); 
+        setTwoColors(front_color, back_color); 
+        break;
+      default: 
+        debug("other");
+        setSingleColor(strip.Color(255,0,128));
+        // TODO
+        break;
+    }
+  } else {
+    setSingleColor(strip.Color(0,0,0)); // off
+  }
+  debug("strip.show");
+  strip.show();
+}
+
+
+/**
  * Set all pixels to the same color.
  */
 void setSingleColor(uint32_t color) {
@@ -350,102 +490,40 @@ void setSingleColor(uint32_t color) {
 }
 
 /**
+ * 
+ */
+void setTwoColors(uint32_t front, uint32_t back) {
+  for (int i = 0; i < LED_COUNT/2; i++) {
+    strip.setPixelColor(pinTranslate(i), front);  
+  }
+  for (int i = LED_COUNT/2; i < LED_COUNT; i++) {
+    strip.setPixelColor(pinTranslate(i), back);
+  }
+}
+
+/**
  * Flash all the Pixels once
+ * 
+ * Retrieves current state and restores it after the flash.
+ * Takes 3x wait time, as it is: save, off, flash, off, restore.
  */
 void colorFlash(uint32_t color, int wait) {
+  // Save current state
+  uint16_t cache[LED_COUNT];
+  for (int i = 0; i < LED_COUNT; i++) {
+    cache[i] = strip.getPixelColor(i);
+  }
+  setSingleColor(strip.Color(0,0,0)); // off
+  strip.show();
+  delay(wait);
   setSingleColor(color);
   strip.show();
   delay(wait);
   setSingleColor(strip.Color(0,0,0)); // off
   strip.show();
-}
-
-
-// Some functions of our own for creating animated effects -----------------
-
-// Fill strip pixels one after another with a color. Strip is NOT cleared
-// first; anything there will be covered pixel by pixel. Pass in color
-// (as a single 'packed' 32-bit value, which you can get by calling
-// strip.Color(red, green, blue) as shown in the loop() function above),
-// and a delay time (in milliseconds) between pixels.
-void colorWipe(uint32_t color, int wait) {
-  for(int i=0; i<strip.numPixels(); i++) { // For each pixel in strip...
-    strip.setPixelColor(i, color);         //  Set pixel's color (in RAM)
-    strip.show();                          //  Update strip to match
-    delay(wait);                           //  Pause for a moment
+  delay(wait);
+  for (int i = 0; i < LED_COUNT; i++) {
+    strip.setPixelColor(i, cache[i]);
   }
 }
-
-// Theater-marquee-style chasing lights. Pass in a color (32-bit value,
-// a la strip.Color(r,g,b) as mentioned above), and a delay time (in ms)
-// between frames.
-void theaterChase(uint32_t color, int wait) {
-  for(int a=0; a<10; a++) {  // Repeat 10 times...
-    for(int b=0; b<3; b++) { //  'b' counts from 0 to 2...
-      strip.clear();         //   Set all pixels in RAM to 0 (off)
-      // 'c' counts up from 'b' to end of strip in steps of 3...
-      for(int c=b; c<strip.numPixels(); c += 3) {
-        strip.setPixelColor(c, color); // Set pixel 'c' to value 'color'
-      }
-      strip.show(); // Update strip with new contents
-      delay(wait);  // Pause for a moment
-    }
-  }
-}
-
-// Rainbow cycle along whole strip. Pass delay time (in ms) between frames.
-void rainbow(int wait) {
-  // Hue of first pixel runs 5 complete loops through the color wheel.
-  // Color wheel has a range of 65536 but it's OK if we roll over, so
-  // just count from 0 to 5*65536. Adding 256 to firstPixelHue each time
-  // means we'll make 5*65536/256 = 1280 passes through this outer loop:
-  for(long firstPixelHue = 0; firstPixelHue < 5*65536; firstPixelHue += 256) {
-    for(int i=0; i<strip.numPixels(); i++) { // For each pixel in strip...
-      // Offset pixel hue by an amount to make one full revolution of the
-      // color wheel (range of 65536) along the length of the strip
-      // (strip.numPixels() steps):
-      int pixelHue = firstPixelHue + (i * 65536L / strip.numPixels());
-      // strip.ColorHSV() can take 1 or 3 arguments: a hue (0 to 65535) or
-      // optionally add saturation and value (brightness) (each 0 to 255).
-      // Here we're using just the single-argument hue variant. The result
-      // is passed through strip.gamma32() to provide 'truer' colors
-      // before assigning to each pixel:
-      strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(pixelHue)));
-    }
-    strip.show(); // Update strip with new contents
-    delay(wait);  // Pause for a moment
-  }
-}
-
-// Rainbow-enhanced theater marquee. Pass delay time (in ms) between frames.
-void theaterChaseRainbow(int wait) {
-  int firstPixelHue = 0;     // First pixel starts at red (hue 0)
-  for(int a=0; a<30; a++) {  // Repeat 30 times...
-    for(int b=0; b<3; b++) { //  'b' counts from 0 to 2...
-      strip.clear();         //   Set all pixels in RAM to 0 (off)
-      // 'c' counts up from 'b' to end of strip in increments of 3...
-      for(int c=b; c<strip.numPixels(); c += 3) {
-        // hue of pixel 'c' is offset by an amount to make one full
-        // revolution of the color wheel (range 65536) along the length
-        // of the strip (strip.numPixels() steps):
-        int      hue   = firstPixelHue + c * 65536L / strip.numPixels();
-        uint32_t color = strip.gamma32(strip.ColorHSV(hue)); // hue -> RGB
-        strip.setPixelColor(c, color); // Set pixel 'c' to value 'color'
-      }
-      strip.show();                // Update strip with new contents
-      delay(wait);                 // Pause for a moment
-      firstPixelHue += 65536 / 90; // One cycle of color wheel over 90 frames
-    }
-  }
-}
-
-void oneColorChase(uint32_t color, int wait) {
-  for(int i=0; i < LED_COUNT; i++) {
-    strip.clear();
-    strip.setPixelColor(i, color);
-    strip.show();
-    delay(wait);
-  }
-  strip.clear();
-  strip.show();
-}
+ 
