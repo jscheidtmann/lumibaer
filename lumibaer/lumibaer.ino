@@ -36,9 +36,9 @@ int pinTranslate(int pin) {
     // Front Ring, starting from 12 o'clock position, clockwise
     29, 28, 27, 26, 25, 24, 23, 22,  
     21, 20, 19, 18, 17, 16, 31, 30,
-    // Back Ring, starting from 12 o'clock position, counter clockwise
-    14, 15,  0,  1,  2,  3,  4,  5,
-     6,  7,  8,  9, 10, 11, 12, 13
+    // Back Ring, starting from one next to 12 o'clock position, counter clockwise
+    13, 14, 15,  0,  1,  2,  3,  4,  
+     5,  6,  7,  8,  9, 10, 11, 12, 
   };
 
   return translation[pin];
@@ -82,7 +82,7 @@ NanoESP_HTTP http = NanoESP_HTTP(nanoesp);
 // This is a prime on purpose.
 #define SINGLE_INCREMENT 51
 
-#define ROTATE_WAIT 300
+#define ROTATE_WAIT 50
 
 // Globals -----------------------------------------------------------------
 
@@ -117,6 +117,23 @@ uint32_t back_color = 0;
 
 uint32_t left_color = 0;
 uint32_t right_color = 0;
+
+uint32_t sweep1 = 0;
+uint32_t sweep2 = 0;
+
+/**
+ * Wait this many millisecond for a rotation step
+ * 
+ * Is set by "rotatewait" UDP command.
+ * Smaller means quicker. 
+ */
+unsigned int rotate_wait = ROTATE_WAIT;
+
+/**
+ * State of rotation. 
+ * 
+ * Will be incremented, if one of the rotation modes is active.
+ */
 int rotate = 0;
 
 /**
@@ -131,10 +148,10 @@ uint16_t single_hue = 0;
  */
 enum modes {
   MODE_SINGLE_COLOR, // Show one color perpetually
-  MODE_TWO_COLOR,  // Show different color on front and back.
-  MODE_SWEEP, 
-  MODE_ROTATE_TWO,
-  MODE_LIGHTHOUSE,
+  MODE_TWO_COLOR,    // Show different color on front and back.
+  MODE_ROTATE_TWO,   // Show two colors on halves, then rotate.
+  MODE_SWEEP,        // Sweep between two colors
+  MODE_LIGHTHOUSE,   // Parse and show a lighthouse Kennung
   MODE_UNKNOWN
 } lumibaer_mode = MODE_SINGLE_COLOR;
 
@@ -276,6 +293,11 @@ void loop() {
       if (brightness < 0) brightness = 0;
       if (brightness > 255) brightness = 255;
       strip.setBrightness(brightness);
+    } else if (request.startsWith(F(":rotwait?"))) {
+      debug(F("rotwait"));
+      rotate_wait = strtoul(request.substring(9).c_str(), NULL, 10);
+      // Avoid values that are two small. 
+      if (rotate_wait < 100) rotate_wait = 100;
     } else if (request.startsWith(F(":toggle"))) {
       lumibaer_state = !lumibaer_state;
       // debug(F("Toggle!"));
@@ -297,24 +319,44 @@ void loop() {
     } else if (request.startsWith(F(":rotate?"))) {
       lumibaer_mode = MODE_ROTATE_TWO;
       lumibaer_state = true;
-      left_color = strtoul(request.substring(5, 11).c_str(), NULL, 16);
-      right_color = strtoul(request.substring(12,18).c_str(), NULL, 16);
+      rotate = 0;
+      left_color = strtoul(request.substring(8, 14).c_str(), NULL, 16);
+      right_color = strtoul(request.substring(15,21).c_str(), NULL, 16);
+    } else if (request.startsWith(F(":sweep?"))) {
+      lumibaer_mode = MODE_SWEEP;
+      lumibaer_state = true;
+      rotate=0;
+      sweep1 = strtoul(request.substring(7, 13).c_str(), NULL, 16);
+      sweep2 = strtoul(request.substring(14, 20).c_str(), NULL, 16);
+    } else if (request.startsWith(F(":lighthouse?"))) {
+      lumibaer_mode = MODE_LIGHTHOUSE;
+      lumibaer_state = true;
+      rotate=0;
+      parseLighthouseSpec(request.substring(12));
     }
     synchronizeStrip();
   }
 
-  switch (lumibaer_mode) {
-    case MODE_ROTATE_TWO: 
-      static unsigned long last_rotate = 0L;
-      if ((now - last_rotate) > ROTATE_WAIT) {
-        last_rotate = now;
-        rotate++;
-      }
-      synchronizeStrip();
-      break;
-    default: 
-      ; // No Op
-      break;
+  if (lumibaer_state) {
+    // Lumibaer needs to be on.
+    switch (lumibaer_mode) {
+      case MODE_ROTATE_TWO:
+      case MODE_SWEEP: 
+        static unsigned long last_rotate = 0L;
+        if (last_rotate == 0L) {
+          last_rotate = now; 
+        } else if ((now - last_rotate) > rotate_wait) {
+          last_rotate = now;
+          // debug(F("rotate"));
+          rotate++;
+          synchronizeStrip();
+        }
+        break;
+       
+      default: 
+        ; // No Op
+        break;
+    }    
   }
   // */
   /*
@@ -327,6 +369,23 @@ void loop() {
     Serial.write(nanoesp.read());
   } 
   */
+}
+
+
+// Lighthouse --------------------------------------------------------------
+
+/**
+ * 
+ */
+void parseLighthouseSpec(const String & spec) {
+  
+}
+
+/**
+ * Oc(2)WRG.9s
+ */
+void lighthouse() {
+  debug(F("lighthouse"));
 }
 
 // State bearing functions -------------------------------------------------
@@ -472,36 +531,42 @@ void onboardLedSwitch() {
  * Make strip reflect the internal lumibaer_state.
  */
 void synchronizeStrip() {
-  debug(F("synchronizeStrip"));
-  debug(String(lumibaer_mode));
+  // debug(F("synchronizeStrip"));
+  // debug(String(lumibaer_mode));
   if (lumibaer_state) {
     switch (lumibaer_mode) {
       case MODE_SINGLE_COLOR: 
-        debug("Single");
+        debug(F("Single"));
         debug(String(single_color));
         setSingleColor(single_color); 
         break;
       case MODE_TWO_COLOR:
-        debug("Two");
+        debug(F("Two"));
         debug(String(front_color, 16));
         debug(String(back_color, 16)); 
         setTwoColors(front_color, back_color); 
         break;
       case MODE_ROTATE_TWO:
-        debug("Rotate");
-        // TODO
-        setSingleColor(strip.Color(128,0,255));
+        // debug(F("Rotate"));
+        rotateTwoColors(left_color, right_color);
+        break;
+      case MODE_SWEEP:
+        // debug(F("sweep"));
+        sweepTwoColors(sweep1, sweep2);
+        break;
+      case MODE_LIGHTHOUSE:
+        lighthouse();
         break;
       default: 
-        debug("other");
+        debug(F("other"));
         setSingleColor(strip.Color(255,0,128));
-        // TODO
+        // TO DO?
         break;
     }
   } else {
     setSingleColor(strip.Color(0,0,0)); // off
   }
-  debug("strip.show");
+  // debug("strip.show");
   strip.show();
 }
 
@@ -525,6 +590,55 @@ void setTwoColors(uint32_t front, uint32_t back) {
   for (int i = LED_COUNT/2; i < LED_COUNT; i++) {
     strip.setPixelColor(pinTranslate(i), back);
   }
+}
+
+/**
+ * 
+ */
+void rotateTwoColors(uint32_t left, uint32_t right)  {
+  int rot = rotate % (LED_COUNT/2);
+
+  for (int i = 0; i < LED_COUNT/2; i++) { // 0-15
+    if ( ((i+rot)/(LED_COUNT/4))%2 == 0) {
+      // 0-7
+      strip.setPixelColor(pinTranslate(i), left);
+      strip.setPixelColor(pinTranslate(i+LED_COUNT/2), left);
+    } else {
+      // 8-15
+      strip.setPixelColor(pinTranslate(i), right);
+      strip.setPixelColor(pinTranslate(i+LED_COUNT/2), right);
+    }
+  }
+}
+
+/**
+ * Sweep
+ * 
+ * Interpolate linearly between two colors. 
+ * Sweep back and forth. 
+ */
+
+void sweepTwoColors(uint32_t sweep1, uint32_t sweep2) {
+  static boolean down  = false;
+
+  int rot = rotate % 128;
+  if (down) {
+    rot = 127 - rot;
+  } 
+
+  uint32_t R = (((sweep1>>16)&0xFF) * rot + ((sweep2>>16)&0xFF) * (127-rot))/127;
+  uint32_t G = (((sweep1>> 8)&0xFF) * rot + ((sweep2>> 8)&0xFF) * (127-rot))/127;
+  uint32_t B = (((sweep1    )&0xFF) * rot + ((sweep2    )&0xFF) * (127-rot))/127;
+  // debug(String("rot:") + rot + " R:" + R + " G:" + G + " B:" + B);
+  
+  strip.fill(strip.Color(R,G,B), 0, LED_COUNT);
+
+  if (rot == 127) {
+    down = true;
+  } else if (rot == 0) {
+    down = false;
+  }
+  // debug(String(rot) + " " + down);
 }
 
 /**
