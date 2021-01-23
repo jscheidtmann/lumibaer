@@ -171,7 +171,7 @@ unsigned int rotate = 0;
  * 
  * when running through colors, ie. button is long pressed.
  */
-uint16_t single_hue = 0;
+uint32_t single_hue = 0;
 
 /**
  * The different modes supported by the Lumibaer software.
@@ -197,10 +197,17 @@ boolean lumibaer_state = false;
  * State for animations in modes: MODE_MORSE and MODE_LIGHTHOUSE
  */
 struct animation_step {
-  uint16_t color;
   unsigned long wait;
+  enum { 
+    SINGLE,
+    TWO, 
+    THREE  
+  } mode;
+  uint32_t color;
+  uint32_t color2;
+  uint32_t color3;
   int next;
-} animation_steps[60];
+} animation_steps[10];
 
 int active_step = 0;
 
@@ -252,6 +259,19 @@ void setup() {
   single_color = strip.Color(255,255,255); // White
   lumibaer_mode = MODE_SINGLE_COLOR;
 
+  // Set Default Lighthouse Mode 
+  // Amrum Lighthouse (north sea): Fl. 6.5s
+  animation_step * p = animation_steps;
+  p->mode = animation_step::SINGLE;
+  p->wait = 1000;
+  p->next = 1;
+  p->color = strip.Color(255,255,255); // White
+  p++;
+  p->mode = animation_step::SINGLE;
+  p->wait = 5500;
+  p->next = 0;
+  p->color = strip.Color(0,0,0); // Black
+  
   // Setup Serial
   if (debug_out) {
     // Serial.begin(9600);
@@ -471,11 +491,11 @@ void loop() {
   /////////////////////////////////////////////////////////////////////////////////  
   // Step 4.) Handle animations
   if (lumibaer_state) {
+    static unsigned long last_rotate = 0L;
     // Lumibaer needs to be on.
     switch (lumibaer_mode) {
       case MODE_ROTATE_TWO:
       case MODE_SWEEP: 
-        static unsigned long last_rotate = 0L;
         if (last_rotate == 0L) {
           last_rotate = now; 
         } else if ((now - last_rotate) > rotate_wait) {
@@ -485,9 +505,14 @@ void loop() {
           synchronizeStrip();
         }
         break;
-
       case MODE_LIGHTHOUSE:
       case MODE_MORSE:
+        if (last_rotate == 0L) {
+          last_rotate = now;
+        } else if ((now - last_rotate) > animation_steps[active_step].wait) {
+          last_rotate = now;
+          synchronizeStrip();
+        }
       default: 
         ; // No Op
         break;
@@ -703,7 +728,22 @@ void synchronizeStrip() {
         break;
       case MODE_LIGHTHOUSE:
       case MODE_MORSE:
-        setSingleColor(strip.Color(255,0,0));
+        switch(animation_steps[active_step].mode) {
+          case animation_step::SINGLE:
+            setSingleColor(animation_steps[active_step].color);
+            break;
+          case animation_step::TWO: 
+            setRightLeftColors(animation_steps[active_step].color, animation_steps[active_step].color2);
+            break;
+          case animation_step::THREE:
+            setThreeColors(animation_steps[active_step].color,
+                     animation_steps[active_step].color2,
+                     animation_steps[active_step].color3);
+            break;
+          default:
+            break;
+        }
+        active_step = animation_steps[active_step].next;
         break;
       default: 
         debug(F("other"));
@@ -723,9 +763,53 @@ void synchronizeStrip() {
  * Set all pixels to the same color.
  */
 void setSingleColor(uint32_t color) {
-  for (int i=0; i <strip.numPixels(); i++) {
-    strip.setPixelColor(i, color); 
+  strip.fill(color, 0, LED_COUNT);
+}
+
+/** 
+ * Set Two colors, one for left half, one for right half.
+ */
+void setRightLeftColors(uint32_t left, uint32_t right) {
+  for (int i = 0; i < LED_COUNT/2; i++) {
+    strip.setPixelColor(pinTranslate(i), left);              // Front 
+    strip.setPixelColor(pinTranslate(i+LED_COUNT/2), left);  // Back
+   }
+  for (int i = LED_COUNT/2; i < LED_COUNT; i++) {
+    strip.setPixelColor(pinTranslate(i), right);             // Front
+    strip.setPixelColor(pinTranslate(i+LED_COUNT/2), right); // Back
   }
+}
+
+/**
+ * Set three colors (for each of the usual sectors of a Lighthous)
+ * 
+ *          0   
+ *         /
+ *       2 2 2         
+ *     1       3     
+ *    1         3
+ *   1           3
+ *    1         3
+ *     1       3
+ *       2 2 2
+ */
+void setThreeColors(uint32_t col1, uint32_t col2, uint32_t col3) {
+  // Left Color
+  strip.fill(col1, 9, 6); // Front
+  strip.fill(col1, 9+LED_COUNT/2, 6); // Back
+  // Middle Color
+    // Front
+  strip.fill(col2, 0, 2);
+  strip.fill(col2, 7, 3);
+  strip.setPixelColor(col2, 15);
+    // Back
+  strip.fill(col2, 0+LED_COUNT/2, 2);
+  strip.fill(col2, 7+LED_COUNT/2, 3);
+  strip.setPixelColor(col2, 15+LED_COUNT/2);
+  
+  // Right Color
+  strip.fill(col3, 2, 6); // Front
+  strip.fill(col3, 2+LED_COUNT/2, 6); // Back
 }
 
 /**
@@ -801,7 +885,7 @@ void sweepTwoColors(uint32_t sweep1, uint32_t sweep2) {
  */
 void colorFlash(uint32_t color, int wait) {
   // Save current state
-  uint16_t cache[LED_COUNT];
+  uint32_t cache[LED_COUNT];
   for (int i = 0; i < LED_COUNT; i++) {
     cache[i] = strip.getPixelColor(i);
   }
