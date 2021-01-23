@@ -197,7 +197,7 @@ boolean lumibaer_state = false;
  * State for animations in modes: MODE_MORSE and MODE_LIGHTHOUSE
  */
 struct animation_step {
-  unsigned long wait;
+  unsigned long duration;
   enum { 
     SINGLE,
     TWO, 
@@ -263,12 +263,12 @@ void setup() {
   // Amrum Lighthouse (north sea): Fl. 6.5s
   animation_step * p = animation_steps;
   p->mode = animation_step::SINGLE;
-  p->wait = 1000;
+  p->duration = 1000;
   p->next = 1;
   p->color = strip.Color(255,255,255); // White
   p++;
   p->mode = animation_step::SINGLE;
-  p->wait = 5500;
+  p->duration = 5500;
   p->next = 0;
   p->color = strip.Color(0,0,0); // Black
   
@@ -509,9 +509,15 @@ void loop() {
       case MODE_MORSE:
         if (last_rotate == 0L) {
           last_rotate = now;
-        } else if ((now - last_rotate) > animation_steps[active_step].wait) {
-          last_rotate = now;
+          active_step = 0;
+          // switch on immediately:
           synchronizeStrip();
+          rotate_wait = animation_steps[active_step].duration;
+        } else if ((now - last_rotate) > rotate_wait) {
+          last_rotate = now;
+          active_step = animation_steps[active_step].next;
+          synchronizeStrip();
+          rotate_wait = animation_steps[active_step].duration;
         }
       default: 
         ; // No Op
@@ -743,7 +749,6 @@ void synchronizeStrip() {
           default:
             break;
         }
-        active_step = animation_steps[active_step].next;
         break;
       default: 
         debug(F("other"));
