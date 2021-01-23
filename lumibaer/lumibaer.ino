@@ -51,8 +51,6 @@ int pinTranslate(int pin) {
 #include <NanoESP.h>
 #include <NanoESP_HTTP.h>
 
-// This is the library distributed via 
-
 /**
  * define two string constants: 
  * WIFI = SSID of your router 
@@ -82,7 +80,17 @@ NanoESP_HTTP http = NanoESP_HTTP(nanoesp);
 // This is a prime on purpose.
 #define SINGLE_INCREMENT 51
 
+// Time (ms) waited when rotating colors
+// (default value)
 #define ROTATE_WAIT 50
+
+// Time (ms) for Morse wait
+// Short (.) = this time, long (-) = 3x this time.
+// applies also to breaks between . and -, and words (long)
+#define MORSE_WAIT 300
+
+// Default Brightness 0-255
+#define DEFAULT_BRIGHTNESS 50
 
 // Globals -----------------------------------------------------------------
 
@@ -112,13 +120,34 @@ boolean button_state = false;
  */
 uint32_t single_color = 0;
 
+/**
+ * Colors for Front/Back mode: Front color
+ */
 uint32_t front_color = 0;
+
+/**
+ * Colors for Front/Back mode: Back color
+ */
 uint32_t back_color = 0;
 
+/**
+ * Colors for ROTATE_MODE: Left color
+ */
 uint32_t left_color = 0;
+
+/**
+ * Colors for ROTATE_MODE: Right color
+ */
 uint32_t right_color = 0;
 
+/**
+ * Colors for sweep mode (back and forth): First color
+ */
 uint32_t sweep1 = 0;
+
+/**
+ * Colors for sweep mode (back and forth): Second color
+ */
 uint32_t sweep2 = 0;
 
 /**
@@ -133,13 +162,14 @@ unsigned int rotate_wait = ROTATE_WAIT;
  * State of rotation. 
  * 
  * Will be incremented, if one of the rotation modes is active.
+ * (
  */
-int rotate = 0;
+unsigned int rotate = 0;
 
 /**
  * Which color is selected for Single color mode?
  * 
- * when running through colors, ie. button is pressed. long.
+ * when running through colors, ie. button is long pressed.
  */
 uint16_t single_hue = 0;
 
@@ -152,6 +182,7 @@ enum modes {
   MODE_ROTATE_TWO,   // Show two colors on halves, then rotate.
   MODE_SWEEP,        // Sweep between two colors
   MODE_LIGHTHOUSE,   // Parse and show a lighthouse Kennung
+  MODE_MORSE,        // Show a Morse Code message.
   MODE_UNKNOWN
 } lumibaer_mode = MODE_SINGLE_COLOR;
 
@@ -162,8 +193,22 @@ enum modes {
  */
 boolean lumibaer_state = false;
 
+/**
+ * State for animations in modes: MODE_MORSE and MODE_LIGHTHOUSE
+ */
+struct animation_step {
+  uint16_t color;
+  unsigned long wait;
+  int next;
+} animation_steps[60];
+
+int active_step = 0;
+
 // Network state -----------------------------------------------------------
 
+/**
+ * 
+ */
 boolean wifi_check_enabled = true;
 
 boolean wifi_available = false;
@@ -172,6 +217,26 @@ boolean udp_server_running = false;
 
 // setup() function -- runs once at startup --------------------------------
 
+/**
+ * Setup the Lumibaer
+ * 
+ * 1. Setup digital pins
+ *     ONBOARD_LED: output, off
+ *     SWITCH: input pullup
+ *     
+ * 2. Setup Neopixel rings/strip
+ *     Set brightness to 50, to avoid Lumibaer`s head to get warm
+ *     
+ * 3. Default Mode: White, Single color mode
+ * 
+ * 4. Setup Serial (19200)
+ * 
+ * 5. Initialize NanoESP
+ *     Does not yet setup the WiFi, this is done in the Main loop.
+ *     
+ * 6. Blink once in Blue, if setup worked 
+ *     (Setup will not fail)
+ */
 void setup() {
   // Setup digital pins
   pinMode(ONBOARD_LED, OUTPUT);
@@ -179,9 +244,9 @@ void setup() {
   pinMode(SWITCH, INPUT_PULLUP); // Has inverted logic (low = button pressed)
 
   // Setup Neopixel strip
-  strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
-  strip.show();            // Turn OFF all pixels ASAP
-  strip.setBrightness(255); // Set BRIGHTNESS (max = 255), is applied during strip.show()
+  strip.begin();  // INITIALIZE NeoPixel strip object (REQUIRED)
+  strip.show();   // Turn OFF all pixels ASAP
+  strip.setBrightness(DEFAULT_BRIGHTNESS); // Set BRIGHTNESS (max = 255), is applied during strip.show()
 
   // Set Default Color
   single_color = strip.Color(255,255,255); // White
@@ -216,9 +281,65 @@ void setup() {
 
 // loop() function -- runs repeatedly as long as board is on ---------------
 
+/**
+ * Main Loop
+ * 
+ * All waits are done using comparisons against "now", which is initialized at the start of the loop.
+ * wait() is never called.
+ * 
+ * This is the order in which things are done:
+ *  1.) Check state of the button. 
+ *       Do we have a short press? -> Switch Lumibaer on/off
+ *       Do we have a long press? -> Cycle colors
+ *       Synchronize the onboard LED with the button press.
+ *       
+ *  2.) Setup the WiFi 
+ *       Connect to the WiFi.
+ *          Checks after 1s, if connect was successful. 
+ *          If successful, flash green, if not successful, flash red.
+ *          After 10 times, the connect is retried and a yellow flash occurs.
+ *       If successful start a UDP server.
+ *       
+ *  3.) Handle UDP commands to the Lumibaer.
+ *      The routine knows the following commands:
+ *       "on", "off": 
+ *          Switch Lumibaer on or off remotely
+ *       "toggle":
+ *          If Lumibaer is on, set it to off and vice versa
+ *       "brightness?<x>": 
+ *          Set brightness of NeoPixel strip. 
+ *          <x> a number between 0 and 255, 
+ *          if x is negative the default brightness will be set.
+ *       "color?ffddee":
+ *          Set color for single color mode. Pass the RGB colors as HTML color code (without "#")
+ *          Switches to MODE_SINGLE and the Lumibaer on.
+ *       "lighthouse?Oc(3) 3s RWG":
+ *          Turns on lighthouse mode. Parses a lighthouse specification into animation_steps, 
+ *          see https://en.wikipedia.org/wiki/Light_characteristic 
+ *       "morse?sos":
+ *          Turns on Morse code mode. Parses a string into animation_steps, using Morse Code. 
+ *          see https://en.wikipedia.org/wiki/Morse_code
+ *       "rotate?ffddee,aabbcc":   
+ *          half of the ring is color "ffddee", other half of ring is "aabbcc", as HTML color code.
+ *          Switches to MODE_ROTATE_TWO and the Lumibaer on.
+ *       "sweep?ffddee,aabbcc":
+ *          Change color from ffddee to aabbcc, interpolating linearly for each color channel.   
+ *          Siwtches to MODE_SWEEP and the Lumibaer on.
+ *       "two?ffddee,aabbcc":
+ *          Set color for two color mode (Front and Back different color)
+ *          Pass the two colors as RGB colors (replacing ffddee and aabbcc with respective values).
+ *          Switches to MODE_TWO_COLOR and the Lumibaer on.
+ *          
+ * 4.) Handle Animation
+ *       If a mode needs animation and is active, the rotation variable is increased 
+ *       and the strip state is synchronized.
+ *           
+ */
 void loop() {
   unsigned long now = millis();
 
+  /////////////////////////////////////////////////////////////////////////////////  
+  // Step 1.)
   // Handle Button Presses (Switches to MODE_SINGLE_COLOR)
   
   if (buttonDownDetected(now)) {
@@ -237,6 +358,8 @@ void loop() {
   // Make onboard LED reflect button state.
   onboardLedSwitch();
 
+  /////////////////////////////////////////////////////////////////////////////////  
+  // Step 2.)
   // Try setting up the WiFi (once a second)
   static unsigned long last_check = 0L;
   static int wifi_check_count = 0;
@@ -276,7 +399,10 @@ void loop() {
     }
   }
 
-  // / *
+  /////////////////////////////////////////////////////////////////////////////////
+  // Step 3.) Serve UDP Commands
+  
+  // / * // Comment out Step 3, for passthrough, see below
   int client, len; 
   while (nanoesp.recvData(client, len)) {
     String request = nanoesp.readString();
@@ -290,7 +416,7 @@ void loop() {
     } else if (request.startsWith(F(":brightness?"))) {
       debug(F("brightness"));
       int brightness = strtol(request.substring(12).c_str(), NULL, 10);
-      if (brightness < 0) brightness = 0;
+      if (brightness < 0) brightness = DEFAULT_BRIGHTNESS;
       if (brightness > 255) brightness = 255;
       strip.setBrightness(brightness);
     } else if (request.startsWith(F(":rotwait?"))) {
@@ -333,10 +459,17 @@ void loop() {
       lumibaer_state = true;
       rotate=0;
       parseLighthouseSpec(request.substring(12));
+    } else if (request.startsWith(F(":morse?"))) {
+      lumibaer_mode = MODE_MORSE;
+      lumibaer_state = true;
+      rotate=0;
+      parseMorseSpec(request.substring(7));
     }
     synchronizeStrip();
   }
 
+  /////////////////////////////////////////////////////////////////////////////////  
+  // Step 4.) Handle animations
   if (lumibaer_state) {
     // Lumibaer needs to be on.
     switch (lumibaer_mode) {
@@ -352,14 +485,20 @@ void loop() {
           synchronizeStrip();
         }
         break;
-       
+
+      case MODE_LIGHTHOUSE:
+      case MODE_MORSE:
       default: 
         ; // No Op
         break;
     }    
   }
-  // */
+  // */ // Comment out step 3
   /*
+  //////////////////////////////////////////////////////////////////////
+  // Pass input from Serial through to the NanoESP. 
+  // 
+  // !!! To avoid clashes with UDP command handling, you need to comment out Step 3!!!
   // Serial Monitor passes stuff through to the ESP.
   while (Serial.available()) {
     nanoesp.write(Serial.read());
@@ -375,18 +514,22 @@ void loop() {
 // Lighthouse --------------------------------------------------------------
 
 /**
- * 
+ * Oc(2)WRG.9s
  */
 void parseLighthouseSpec(const String & spec) {
   
 }
 
+
+// Morse -------------------------------------------------------------------
+
 /**
- * Oc(2)WRG.9s
+ * SOS = ... --- ...
+ * 
  */
-void lighthouse() {
-  debug(F("lighthouse"));
-}
+ void parseMorseSpec(const String & spec) {
+  
+ }
 
 // State bearing functions -------------------------------------------------
 
@@ -529,6 +672,10 @@ void onboardLedSwitch() {
 
 /**
  * Make strip reflect the internal lumibaer_state.
+ * 
+ * This function calls strip.show() at the end. 
+ * Should be called only, if the strip state needs to change.
+ * Colors that are called from here, should not call strip.show() themselves.
  */
 void synchronizeStrip() {
   // debug(F("synchronizeStrip"));
@@ -555,7 +702,8 @@ void synchronizeStrip() {
         sweepTwoColors(sweep1, sweep2);
         break;
       case MODE_LIGHTHOUSE:
-        lighthouse();
+      case MODE_MORSE:
+        setSingleColor(strip.Color(255,0,0));
         break;
       default: 
         debug(F("other"));
@@ -581,7 +729,7 @@ void setSingleColor(uint32_t color) {
 }
 
 /**
- * 
+ * Set front and back color
  */
 void setTwoColors(uint32_t front, uint32_t back) {
   for (int i = 0; i < LED_COUNT/2; i++) {
@@ -593,6 +741,10 @@ void setTwoColors(uint32_t front, uint32_t back) {
 }
 
 /**
+ * Rotate two colors on each ring
+ * 
+ * First 8 are one color (left), Second 8 are other color (right),
+ * then rotate them around the ring. 
  * 
  */
 void rotateTwoColors(uint32_t left, uint32_t right)  {
