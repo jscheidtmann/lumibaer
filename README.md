@@ -86,6 +86,7 @@ If scaling the model does not work and you need to change the design, here are s
 9) Attach Dupont-terminals to the wires going to be connected to the Arduino
 10) Connect the wires to the Arduino
 11) Connect the Arduino to your PC using an USB cable
+12) If your Arduino features a blue power led, you should remove it (optional)
 
 # Library Installations & Tests & Software Installation
 
