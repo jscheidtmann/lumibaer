@@ -151,6 +151,16 @@ uint32_t sweep1 = 0;
 uint32_t sweep2 = 0;
 
 /**
+ * Colors for wave mode (up and down): Color to start with
+ */
+uint32_t wave1 = 0;
+
+/**
+ * Colors for wave mode (up and down): Color coming in and going out
+ */
+uint32_t wave2 = 0;
+
+/**
  * Wait this many millisecond for a rotation step
  * 
  * Is set by "rotatewait" UDP command.
@@ -181,6 +191,7 @@ enum modes {
   MODE_TWO_COLOR,    // Show different color on front and back.
   MODE_ROTATE_TWO,   // Show two colors on halves, then rotate.
   MODE_SWEEP,        // Sweep between two colors
+  MODE_WAVE,         // Wave going up and down
   MODE_LIGHTHOUSE,   // Parse and show a lighthouse Kennung
   MODE_MORSE,        // Show a Morse Code message.
   MODE_UNKNOWN
@@ -210,6 +221,12 @@ struct animation_step {
 } animation_steps[10];
 
 int active_step = 0;
+
+
+const String & morse_string = (String) NULL;
+int morse_pos = 0;
+
+
 
 // Network state -----------------------------------------------------------
 
@@ -349,6 +366,9 @@ void setup() {
  *          Set color for two color mode (Front and Back different color)
  *          Pass the two colors as RGB colors (replacing ffddee and aabbcc with respective values).
  *          Switches to MODE_TWO_COLOR and the Lumibaer on.
+ *       "wave?ffddee,aabbcc":
+ *          Start with color ffddee (HTML RGB code, leave out the "#". 
+ *          then let other color aabbcc swell up and down like a wave
  *          
  * 4.) Handle Animation
  *       If a mode needs animation and is active, the rotation variable is increased 
@@ -484,6 +504,12 @@ void loop() {
       lumibaer_state = true;
       rotate=0;
       parseMorseSpec(request.substring(7));
+    } else if (request.startsWith(F(":wave?"))) {
+      lumibaer_mode = MODE_WAVE;
+      lumibaer_state = true;
+      rotate=0;
+      wave1 = strtoul(request.substring(6, 12).c_str(), NULL, 16);
+      wave2 = strtoul(request.substring(13, 19).c_str(), NULL, 16);
     }
     synchronizeStrip();
   }
@@ -496,6 +522,7 @@ void loop() {
     switch (lumibaer_mode) {
       case MODE_ROTATE_TWO:
       case MODE_SWEEP: 
+      case MODE_WAVE:
         if (last_rotate == 0L) {
           last_rotate = now; 
         } else if ((now - last_rotate) > rotate_wait) {
@@ -518,6 +545,8 @@ void loop() {
           active_step = animation_steps[active_step].next;
           synchronizeStrip();
           rotate_wait = animation_steps[active_step].duration;
+          if (active_step < 0) 
+            nextMorseCharacter();
         }
       default: 
         ; // No Op
@@ -558,9 +587,30 @@ void parseLighthouseSpec(const String & spec) {
  * SOS = ... --- ...
  * 
  */
- void parseMorseSpec(const String & spec) {
-  
- }
+void parseMorseSpec(const String & spec) {
+  // Add Calling all stations to front and <OVER> to end
+  morse_string = String("cq cq cq ") + spec + " k ";
+  morse_pos = 0; 
+}
+
+
+void nextMorseCharacter() {
+  if (morse_pos > morse_string.length()) {
+    // TODO: Send OVER and OUT symbols (<AR>) 
+    morse_out();
+    morse_pos = 0;
+  }
+  char ch = morse_string[morse_pos++];
+  morse_send(ch);
+}
+
+void morse_out() {
+  // TODO: <AR> Send A and R, but with no spacing.
+}
+
+void morse_send(char ch) {
+  // TODO: Translate to morse code and store in animation_steps.
+}
 
 // State bearing functions -------------------------------------------------
 
@@ -750,6 +800,9 @@ void synchronizeStrip() {
             break;
         }
         break;
+      case MODE_WAVE:
+        waveColors(wave1, wave2);
+        break;
       default: 
         debug(F("other"));
         setSingleColor(strip.Color(255,0,128));
@@ -786,7 +839,7 @@ void setRightLeftColors(uint32_t left, uint32_t right) {
 }
 
 /**
- * Set three colors (for each of the usual sectors of a Lighthous)
+ * Set three colors (for each of the usual sectors of a Lighthouse)
  * 
  *          0   
  *         /
@@ -829,6 +882,61 @@ void setTwoColors(uint32_t front, uint32_t back) {
   }
 }
 
+/** 
+ * Wave colors
+ *  
+ *           Position 0
+ *          /       |--- t ---- X indicating line is on ---->
+ *         |   rot:           1         2         3            ... 
+ *         |        01234567890123456789012345678901234567     ...      
+ *       0 0 0             X             X             X
+ *     0       0          XXX           XXX           XXX
+ *    0         0        XXXXX         XXXXX         XXXXX 
+ *   0           0      XXXXXXX       XXXXXXX       XXXXXX 
+ *    0         0      XXXXXXXXX     XXXXXXXXX     XXXXXXX 
+ *     0       0      XXXXXXXXXXX   XXXXXXXXXXX   XXXXXXXX 
+ *       0 0 0       XXXXXXXXXXXXX XXXXXXXXXXXXX XXXXXXXXX      ...
+ *          \ 
+ *           LED_COUNT/4
+ *    
+ * You get the idea...
+ *
+ * 0 = only first color
+ * 1 = 1 LED
+ * 7
+ */
+void waveColors(uint32_t col1, uint32_t col2) {
+  int rot = rotate % (LED_COUNT/2 + 2); // Is always >0 (rotate being unsigned)
+
+  // debug(String(rot));
+  if (rot == 0) {
+    strip.fill(col1, 0, LED_COUNT);
+  } else if (rot <= LED_COUNT/4) {
+    // debug(F("First wave"));
+    strip.fill(col1, 0, LED_COUNT);
+    
+    // Second color. 
+    // Starting from a pixel (LED_COUNT/4), in each step add an additional pixel left and right.
+    // Is stopped before the color can overflow to the back, by the if condition above.
+    for (int i = LED_COUNT/4 - (rot-1); i <= LED_COUNT/4 + (rot-1); i++) {
+      strip.setPixelColor(pinTranslate(i), col2); // Front
+      strip.setPixelColor(pinTranslate(i+LED_COUNT/2), col2); // Back
+    }
+  } else if (rot == LED_COUNT/4+1) {
+    // debug(F("fill col2"));
+    strip.fill(col2, 0, LED_COUNT);
+  } else {
+    // debug(F("Second wave"));
+    strip.fill(col1, 0, LED_COUNT);
+    
+    // Same as first wave, but count down.
+    for (int i = LED_COUNT/4 - (LED_COUNT/2+1-rot); i <= LED_COUNT/4 + (LED_COUNT/2+1-rot); i++) {
+      strip.setPixelColor(pinTranslate(i), col2); // Front
+      strip.setPixelColor(pinTranslate(i+LED_COUNT/2), col2); // Back      
+    }
+  } 
+}
+
 /**
  * Rotate two colors on each ring
  * 
@@ -839,6 +947,7 @@ void setTwoColors(uint32_t front, uint32_t back) {
 void rotateTwoColors(uint32_t left, uint32_t right)  {
   int rot = rotate % (LED_COUNT/2);
 
+  // Swell up
   for (int i = 0; i < LED_COUNT/2; i++) { // 0-15
     if ( ((i+rot)/(LED_COUNT/4))%2 == 0) {
       // 0-7
