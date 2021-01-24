@@ -192,7 +192,7 @@ enum modes {
   MODE_ROTATE_TWO,   // Show two colors on halves, then rotate.
   MODE_SWEEP,        // Sweep between two colors
   MODE_WAVE,         // Wave going up and down
-  MODE_LIGHTHOUSE,   // Parse and show a lighthouse Kennung
+  MODE_LIGHTHOUSE,   // Parse and show a lighthouse characteristic (Leuchtfeuer Kennung)
   MODE_MORSE,        // Show a Morse Code message.
   MODE_UNKNOWN
 } lumibaer_mode = MODE_SINGLE_COLOR;
@@ -209,10 +209,10 @@ boolean lumibaer_state = false;
  */
 struct animation_step {
   unsigned long duration;
-  enum { 
-    SINGLE,
-    TWO, 
-    THREE  
+  enum step_mode { 
+    SINGLE, // 0
+    TWO,    // 1
+    THREE   // 3
   } mode;
   uint32_t color;
   uint32_t color2;
@@ -350,8 +350,8 @@ void setup() {
  *       "color?ffddee":
  *          Set color for single color mode. Pass the RGB colors as HTML color code (without "#")
  *          Switches to MODE_SINGLE and the Lumibaer on.
- *       "lighthouse?Oc(3) 3s RWG":
- *          Turns on lighthouse mode. Parses a lighthouse specification into animation_steps, 
+ *       "lighthouse?Oc(3) 5s RGW":
+ *          Turns on lighthouse mode. Parses a lighthouse's characteristic into animation_steps, 
  *          see https://en.wikipedia.org/wiki/Light_characteristic 
  *       "morse?sos":
  *          Turns on Morse code mode. Parses a string into animation_steps, using Morse Code. 
@@ -454,13 +454,13 @@ void loop() {
       lumibaer_state = false;
       // debug(F("Set OFF!"));
     } else if (request.startsWith(F(":brightness?"))) {
-      debug(F("brightness"));
+      // debug(F("brightness"));
       int brightness = strtol(request.substring(12).c_str(), NULL, 10);
       if (brightness < 0) brightness = DEFAULT_BRIGHTNESS;
       if (brightness > 255) brightness = 255;
       strip.setBrightness(brightness);
     } else if (request.startsWith(F(":rotwait?"))) {
-      debug(F("rotwait"));
+      // debug(F("rotwait"));
       rotate_wait = strtoul(request.substring(9).c_str(), NULL, 10);
       // Avoid values that are two small. 
       if (rotate_wait < 100) rotate_wait = 100;
@@ -574,12 +574,333 @@ void loop() {
 // Lighthouse --------------------------------------------------------------
 
 /**
+ * Lighthouse modes.
+ */
+enum lh {
+  FIXED,
+  FLASH,
+  LONG_FLASH, 
+  OCCULTING,
+  ISO,
+  QUICK,
+  VERYQUICK
+} lh_m = lh::FIXED; 
+
+int lh_groups = 1;
+
+struct lh_color {
+  char color_ch; 
+  uint32_t color;
+} lh_colors[] = { 
+  { 'W', strip.Color(255,255,255) },
+  { 'R', strip.Color(255,  0,  0) },
+  { 'G', strip.Color(  0,255,  0) },
+  { 'B', strip.Color(  0,  0,255) },
+  { 'Y', strip.Color(  0,255,255) }
+};
+
+int lh_cycle = 0; // Cycle time in ms, e.g. 6500 for 6.5s.
+
+String lh_colspec = (String) NULL;
+
+/**
  * Oc(2)WRG.9s
+ * 
+ * BNF of a Lighthouse characteristic, see https://en.wikipedia.org/wiki/Light_characteristic
+ * 
+ * characteristic = mode group? color? cycle? .
+ * mode           = "F" | "Iso" | "Fl" group? | "L.Fl" group? | "Oc" group? | "Q" group? | "VQ" group? .  
+ *   // No group and cycle for "F". 
+ *   // No cylce for "Q" and "VQ" when standalone, but if a group is specified, it becomes mandatory.
+ * group          = "(" posnumber ")" .  
+ * color          = colcode+ .
+ * colcode        = "W" | "R" | "G" | "B" | "Y" . 
+ * cycle          = float "s" .
+ * float          = posnumber+ ( "." number+ )? .    // Note: we use one of the string to number functions, so you can ignore the rest of the spec.
+ * posnumber      = notnull number* .
+ * notnull        = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" . 
+ * number         = "0" | notnull .
+ * 
+ * Note: US light characteristic listing at http://uslhs.org uses a different way of specifying the characteristic.
+ * 
+ * Durations:
+ *    L.Fl = 3s on per L.Fl
+ *    Oc + F = 1s on per Flash
+ *    Q = 1 "on" per Second (500 ms)
+ *    VQ = 2x "on" per Second (250 ms)
+ * 
+ * Some Examples: 
+ *              Amrum: Fl 6.5s 
+ *          Helgoland: Fl 5s
+ *       Süderoogsand: Iso WR 6s
+ *    Westerheversand: Oc(3) WRG 15s
+ *     Folkstone (UK): Fl(2) 10s
+ *       Danger North: Q
+ *       Danger South: Q(6)+L.Fl 15s  <<== TODO: Cannot be done with this parser.
+ *        Danger East: Q(9)15s
+ *        Danger West: Q(3)15s
+ *     (Danger signs can also be VQ instead of Q)
  */
 void parseLighthouseSpec(const String & spec) {
+  // Remove old state
+  lh_colspec = "";
   
+  int pos = 0;
+
+  // Only use a single line: 
+  spec = spec.substring(0, spec.indexOf("\n"));
+  debug(F("parseLightHouseSpec"));
+  debug(spec);
+  if (!parse_lh_mode_group(spec, pos)) {
+    debug(F("Wrong Mode"));
+    return;
+  }
+  debug(String(pos));
+  debug(F("mode_group ok"));
+  if (!parse_lh_colors(spec,pos)) {
+    debug(F("Wrong colspec"));
+    return;
+  }
+  debug(String(pos));
+  debug(F("colors ok"));
+  if (!parse_lh_cycle(spec,pos)) {
+    if (lh_m == lh::FIXED || lh_m == lh::QUICK || lh_m == lh::VERYQUICK) {
+      lh_groups=1;
+      if (lh_m == lh::QUICK) {
+        lh_cycle = 500*2;        
+      } else if (lh_m == lh::VERYQUICK) {
+        lh_cycle = 250*2;
+      }
+    } else {
+      debug(F("Wrong cycle spec"));
+      return;
+    }
+  }
+  debug(String(pos));
+  debug(F("cycle ok"));
+  
+  // / *
+  debug(F("*** Parse Result: mode, colspec, groups, cycle (ms)"));
+  debug(String(lh_m));
+  debug(lh_colspec);
+  debug(String(lh_groups));
+  debug(String(lh_cycle));
+  // */ 
+
+  compile_lh();
+
+  dump_animation();
 }
 
+void dump_animation() {
+  debug(F("************* Dump animation **********"));
+  for (int i = 0; i < sizeof(animation_steps)/sizeof(animation_step); i++) {
+    animation_step s = animation_steps[i];
+    debug(F("*** #, mode, duration, next, col, col2, col3"));
+    debug(String(i));
+    debug(String(s.mode));
+    debug(String(s.duration));
+    debug(String(s.next));
+    debug(String(s.color, 16));
+    debug(String(s.color2, 16));
+    debug(String(s.color3, 16));
+  }
+}
+
+boolean parse_lh_mode_group(const String & spec, int & pos) {
+  const String next = spec.substring(pos);
+  if (next.startsWith("L.Fl")) {
+    lh_m = lh::LONG_FLASH;
+    pos += 4;
+  } else if (next.startsWith("Fl")) {
+    lh_m = lh::FLASH;
+    pos += 2;
+  } else if (next.startsWith("F")) {
+    lh_m = lh::FIXED;
+    pos += 1;
+  } else if (next.startsWith("Oc")) {
+    lh_m = lh::OCCULTING;
+    pos += 2;
+  } else if (next.startsWith("Iso")) {
+    lh_m = lh::ISO;
+    pos += 1;
+  } else if (next.startsWith("Q")) {
+    lh_m = lh::QUICK;
+    pos += 1;
+  } else if (next.startsWith("VQ")) {
+    lh_m = lh::VERYQUICK;
+    pos += 2;
+  } else {
+    return false;
+  }
+
+  if (spec[pos] == '(' && (lh_m == lh::FIXED || lh_m == lh::ISO)) {
+    return false;
+  } else if (spec[pos] == '(' && lh_m != lh::FIXED && lh_m != lh::ISO) {
+    return parse_lh_group(spec, pos);
+  } else {
+    lh_groups = 1;
+    // pos increase already happened in switch!
+    return true;
+  }
+}
+
+boolean parse_lh_group(const String &spec, int & pos) {
+
+  if (spec[pos] == '(') {
+    pos++;
+  } else {
+    return false;
+  }
+  lh_groups = strtol(spec.substring(pos).c_str(), NULL, 10);
+  if (lh_groups <= 1) {
+    return false;
+  } else { 
+    pos = spec.indexOf(")", pos); 
+    if (-1 != pos) {
+      pos++;
+      return true;
+    } else {
+      return false;
+    }
+  }
+}
+
+boolean parse_lh_colors(const String &spec, int & pos) {
+  debug(F("parse_lh_colors"));
+  debug(spec.substring(pos));
+  
+  // Avoid parsing, if we already found something.
+  if (lh_colspec != "") {
+    debug(F("early ret true"));
+    return true;
+  }
+
+  int start_pos = pos; 
+  boolean is_color = false; 
+  debug(F("loop"));
+  do {
+    is_color = false;
+    debug(String(spec[pos]));
+    for (int i = 0; i < sizeof(lh_colors)/sizeof(struct lh_color); i++) {
+      if (spec[pos] == lh_colors[i].color_ch) {
+        is_color = true;
+        pos++;
+        break;
+      }
+    }
+  } while (is_color);
+
+  if (pos > start_pos) {
+    lh_colspec = spec.substring(start_pos, pos);
+    debug(F("colspec"));
+    debug(lh_colspec);
+  } else {
+    lh_colspec = String("W");
+    debug(F("colspec = W"));
+  }
+  return true;
+}
+
+boolean parse_lh_cycle(const String &spec, int & pos) {
+  debug(F("parse_lh_cycle"));
+  debug(spec);
+  debug(String(pos));
+  
+  float duration = spec.substring(pos).toFloat();
+  if (duration > 0.f) {
+    lh_cycle = (int) (duration * 1000);
+    pos = spec.indexOf("s", pos)+1;
+    return -1 != pos && lh_cycle > 0;
+  } else {
+    return true;
+  }
+}
+
+void compile_lh() {
+  int max = sizeof(animation_steps)/sizeof(animation_step);
+  if (2*lh_groups > max) lh_groups = max/2;
+  
+  // Initialize animation_steps to all off 
+  for (int i = 0; i < max; i++) {
+    animation_steps[i].mode = animation_step::step_mode::SINGLE;
+    animation_steps[i].color = strip.Color(0,0,0); // Black
+    animation_steps[i].duration = 250;
+    animation_steps[i].next = i+1;
+  }
+  animation_steps[max-1].next = 0;
+
+  // Now create the animation_steps.
+  int total = lh_cycle;
+  int inverted = 0; // 0 if not inverted, 1 if inverted
+  for (int i = 0; i < lh_groups; i++) {
+    switch (lh_m) {
+      case lh::FIXED: 
+         animation_steps[0].duration = 10000;
+         animation_steps[0].next = 0;
+         lh_step_set_colors(animation_steps[0]);
+         break;
+      case lh::FLASH:
+         animation_steps[2*i].duration = 1000;
+         animation_steps[2*i].next = 2*i+1;
+         lh_step_set_colors(animation_steps[2*i]);
+         total -= 1250;
+         break;
+      case lh::LONG_FLASH:
+         animation_steps[2*i].duration = 3000;
+         animation_steps[2*i].next = 2*i+1;
+         lh_step_set_colors(animation_steps[2*i]);
+         total -= 3250;
+         break;
+      case lh::QUICK:
+         animation_steps[2*i].duration = 500;
+         animation_steps[2*i].next = 2*i+1;
+         lh_step_set_colors(animation_steps[2*i]);
+         total -= 750;
+         break;
+      case lh::VERYQUICK:
+         animation_steps[2*i].duration = 250;
+         animation_steps[2*i].next = 2*i+1;
+         lh_step_set_colors(animation_steps[2*i]);
+         total -= 500;
+         break;
+      case lh::OCCULTING:
+         animation_steps[2*i+1].duration = 1000;
+         animation_steps[2*i+1].next = 2*i+2;
+         lh_step_set_colors(animation_steps[2*i+1]);
+         total -= 1250;
+         break;
+      default: 
+         break;
+    } // Switch
+  } // for
+  if (total > 0) {
+    animation_steps[2*lh_groups-1].duration = total;
+    animation_steps[2*lh_groups-1].next = 0;
+  }
+}
+
+void lh_step_set_colors(struct animation_step & step) {
+  int len = lh_colspec.length();
+  if (len <= 3) 
+    step.mode = (animation_step::step_mode) (len-1);
+  else 
+    step.mode = animation_step::step_mode::THREE;
+
+  if (len >= 1) step.color = lh_get_color(lh_colspec[0]);
+  if (len >= 2) step.color2 = lh_get_color(lh_colspec[1]);
+  if (len >= 3) step.color3 = lh_get_color(lh_colspec[2]);     
+}
+
+uint32_t lh_get_color(char ch) {
+    for (int i = 0; i < sizeof(lh_colors)/sizeof(lh_color); i++) {
+      if (lh_colors[i].color_ch == ch) {
+        return lh_colors[i].color;
+      }
+    }
+    // Else return black.
+    return strip.Color(0,0,0);
+}
 
 // Morse -------------------------------------------------------------------
 
@@ -588,8 +909,10 @@ void parseLighthouseSpec(const String & spec) {
  * 
  */
 void parseMorseSpec(const String & spec) {
+  String copy = String(spec);
+  copy.toLowerCase();
   // Add Calling all stations to front and <OVER> to end
-  morse_string = String("cq cq cq ") + spec + " k ";
+  morse_string = String("cq cq cq ") + copy + String(" k ");
   morse_pos = 0; 
 }
 
@@ -828,11 +1151,11 @@ void setSingleColor(uint32_t color) {
  * Set Two colors, one for left half, one for right half.
  */
 void setRightLeftColors(uint32_t left, uint32_t right) {
-  for (int i = 0; i < LED_COUNT/2; i++) {
+  for (int i = 0; i < LED_COUNT/4; i++) {
     strip.setPixelColor(pinTranslate(i), left);              // Front 
     strip.setPixelColor(pinTranslate(i+LED_COUNT/2), left);  // Back
    }
-  for (int i = LED_COUNT/2; i < LED_COUNT; i++) {
+  for (int i = LED_COUNT/4; i < LED_COUNT/2; i++) {
     strip.setPixelColor(pinTranslate(i), right);             // Front
     strip.setPixelColor(pinTranslate(i+LED_COUNT/2), right); // Back
   }
@@ -841,33 +1164,40 @@ void setRightLeftColors(uint32_t left, uint32_t right) {
 /**
  * Set three colors (for each of the usual sectors of a Lighthouse)
  * 
- *          0   
- *         /
- *       2 2 2         
+ *          zero   
+ *         |   
+ *       2 2 2---- one         
  *     1       3     
  *    1         3
  *   1           3
  *    1         3
  *     1       3
  *       2 2 2
+ * 
+ * TODO: This routine depends on using NeoPixel Rings of size 16.
  */
 void setThreeColors(uint32_t col1, uint32_t col2, uint32_t col3) {
   // Left Color
-  strip.fill(col1, 9, 6); // Front
-  strip.fill(col1, 9+LED_COUNT/2, 6); // Back
+  for (int i = 10; i < 15; i++) {
+    strip.setPixelColor(pinTranslate(i), col1); // Front
+    strip.setPixelColor(pinTranslate(i+LED_COUNT/2), col1); // Back
+  }
   // Middle Color
     // Front
-  strip.fill(col2, 0, 2);
-  strip.fill(col2, 7, 3);
-  strip.setPixelColor(col2, 15);
+  strip.setPixelColor(pinTranslate(0), col2);
+  strip.setPixelColor(pinTranslate(1), col2);
+  for (int i = 7; i <7+3; i++) strip.setPixelColor(pinTranslate(i), col2);
+  strip.setPixelColor(pinTranslate(15), col2);
     // Back
-  strip.fill(col2, 0+LED_COUNT/2, 2);
-  strip.fill(col2, 7+LED_COUNT/2, 3);
-  strip.setPixelColor(col2, 15+LED_COUNT/2);
-  
+  strip.setPixelColor(pinTranslate(0+LED_COUNT/2), col2);
+  strip.setPixelColor(pinTranslate(1+LED_COUNT/2), col2);
+  for (int i = 7; i <7+3; i++) strip.setPixelColor(pinTranslate(i+LED_COUNT/2), col2);
+  strip.setPixelColor(pinTranslate(15+LED_COUNT/2), col2);
   // Right Color
-  strip.fill(col3, 2, 6); // Front
-  strip.fill(col3, 2+LED_COUNT/2, 6); // Back
+  for (int i = 2; i < 2+5; i++) {
+    strip.setPixelColor(pinTranslate(i), col3); // Front 
+    strip.setPixelColor(pinTranslate(i+LED_COUNT/2), col3); // Back 
+  }
 }
 
 /**
