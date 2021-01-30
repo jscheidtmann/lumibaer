@@ -724,7 +724,7 @@ boolean parse_lh_mode_group(const String & spec, int & pos) {
     pos += 2;
   } else if (next.startsWith("Iso")) {
     lh_m = lh::ISO;
-    pos += 1;
+    pos += 3;
   } else if (next.startsWith("Q")) {
     lh_m = lh::QUICK;
     pos += 1;
@@ -827,9 +827,8 @@ void compile_lh() {
     animation_steps[i].mode = animation_step::step_mode::SINGLE;
     animation_steps[i].color = strip.Color(0,0,0); // Black
     animation_steps[i].duration = 250;
-    animation_steps[i].next = i+1;
+    animation_steps[i].next = 0;
   }
-  animation_steps[max-1].next = 0;
 
   // Now create the animation_steps.
   int total = lh_cycle;
@@ -870,6 +869,12 @@ void compile_lh() {
          animation_steps[2*i+1].next = 2*i+2;
          lh_step_set_colors(animation_steps[2*i+1]);
          total -= 1250;
+         break;
+      case lh::ISO:
+         animation_steps[2*i].duration = total/2;
+         animation_steps[2*i].next = 2*i+1;
+         lh_step_set_colors(animation_steps[2*i]);
+         total = total/2; 
          break;
       default: 
          break;
