@@ -823,12 +823,14 @@ void compile_lh() {
   if (2*lh_groups > max) lh_groups = max/2;
   
   // Initialize animation_steps to all off 
+  // The loop on groups below depends on this initialization! 
   for (int i = 0; i < max; i++) {
     animation_steps[i].mode = animation_step::step_mode::SINGLE;
     animation_steps[i].color = strip.Color(0,0,0); // Black
     animation_steps[i].duration = 250;
-    animation_steps[i].next = 0;
+    animation_steps[i].next = i+1;
   }
+  animation_steps[max-1].next = 0;
 
   // Now create the animation_steps.
   int total = lh_cycle;
@@ -874,7 +876,7 @@ void compile_lh() {
          animation_steps[2*i].duration = total/2;
          animation_steps[2*i].next = 2*i+1;
          lh_step_set_colors(animation_steps[2*i]);
-         total = total/2; 
+         total = total/(lh_groups*2); 
          break;
       default: 
          break;
