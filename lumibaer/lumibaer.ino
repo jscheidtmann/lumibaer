@@ -376,6 +376,7 @@ void setup() {
  *           
  */
 void loop() {
+  static unsigned long last_rotate = 0L;
   unsigned long now = millis();
 
   /////////////////////////////////////////////////////////////////////////////////  
@@ -503,7 +504,8 @@ void loop() {
       lumibaer_mode = MODE_MORSE;
       lumibaer_state = true;
       rotate=0;
-      parseMorseSpec(request.substring(7));
+      parseMorseSpec(request);
+      last_rotate = 0L;
     } else if (request.startsWith(F(":wave?"))) {
       lumibaer_mode = MODE_WAVE;
       lumibaer_state = true;
@@ -517,7 +519,6 @@ void loop() {
   /////////////////////////////////////////////////////////////////////////////////  
   // Step 4.) Handle animations
   if (lumibaer_state) {
-    static unsigned long last_rotate = 0L;
     // Lumibaer needs to be on.
     switch (lumibaer_mode) {
       case MODE_ROTATE_TWO:
@@ -543,10 +544,10 @@ void loop() {
         } else if ((now - last_rotate) > rotate_wait) {
           last_rotate = now;
           active_step = animation_steps[active_step].next;
-          synchronizeStrip();
-          rotate_wait = animation_steps[active_step].duration;
           if (active_step < 0) 
             nextMorseCharacter();
+          synchronizeStrip();
+          rotate_wait = animation_steps[active_step].duration;
         }
       default: 
         ; // No Op
@@ -908,31 +909,129 @@ uint32_t lh_get_color(char ch) {
  * SOS = ... --- ...
  * 
  */
-void parseMorseSpec(const String & spec) {
-  String copy = String(spec);
-  copy.toLowerCase();
-  // Add Calling all stations to front and <OVER> to end
-  morse_string = String("cq cq cq ") + copy + String(" k ");
-  morse_pos = 0; 
-}
-
-
-void nextMorseCharacter() {
-  if (morse_pos > morse_string.length()) {
-    // TODO: Send OVER and OUT symbols (<AR>) 
-    morse_out();
-    morse_pos = 0;
+void parseMorseSpec(const String & request) {
+  int len = request.indexOf("\n");
+  morse_string = request.substring(7,len);
+  morse_string.toLowerCase();
+  for (int i = 0; i < morse_string.length(); i++) {
+    debug(String((int) morse_string[i], 16));
   }
-  char ch = morse_string[morse_pos++];
-  morse_send(ch);
+  if (morse_string == "sos") {
+    morse_string = String("cqd cqd cqd sos sos sos ") + LUMIPOSITION + " k ";
+  } else {
+    morse_string = String("cq cq cq ") + morse_string + " k ";
+  }  
+  // debug("|");
+  // debug(morse_string);
+  // debug("|");
+  morse_pos = 0; 
+  nextMorseCharacter();
 }
 
-void morse_out() {
-  // TODO: <AR> Send A and R, but with no spacing.
+#define MORSE_DIT_WAIT MORSE_WAIT
+#define MORSE_DAH_WAIT (3*MORSE_DIT_WAIT)
+#define MORSE_CH_WAIT (2*MORSE_DIT_WAIT)
+#define MORSE_WORD_WAIT (6*MORSE_DIT_WAIT)
+#define MORSE_TEXT_WAIT (10000)
+
+/**
+ * Send the next morse character.
+ * 
+ * if we reached and of string, send an <OUT> sequence.
+ * 
+ * 1) configure animation steps to contain the next sequence of morse blinks.
+ * 2) Start animation from begin
+ */
+void nextMorseCharacter() {
+  int i = 0; 
+  if (morse_pos >= morse_string.length()) {
+    // <OUT>
+    // debug(F("Morse Next: <OUT>"));
+    morse_send(0, i);
+    morse_pos = 0;
+  } else {
+    // Next Character to send.
+    char ch = morse_string[morse_pos++];
+    // debug(String(F("Morse Next: ")) + ch);
+    // Send a character, i is expected to be on the last step (usually a wait).
+    morse_send(ch, i);
+  }
+  active_step = 0;  // Reset animation to start at first position.
+  // dump_animation();
 }
 
-void morse_send(char ch) {
-  // TODO: Translate to morse code and store in animation_steps.
+/**
+ * Configure a long blink or a short blink in animation steps.
+ * 
+ * ch must be either '.' or '-', for a short or long blink respectively.
+ * i is on next animation step to be filled.
+ */
+void dit_da(char ch, int& i) {
+  animation_steps[i].mode = animation_step::step_mode::SINGLE;
+  animation_steps[i].duration = (ch == '.') ? MORSE_DIT_WAIT : MORSE_DAH_WAIT;
+  animation_steps[i].color = strip.Color(255,255,255);
+  animation_steps[i].next = i+1;
+  animation_steps[i+1].mode = animation_step::step_mode::SINGLE;
+  animation_steps[i+1].duration = MORSE_DIT_WAIT;
+  animation_steps[i+1].color = strip.Color(0,0,0);
+  animation_steps[i+1].next = i+2;
+  i+=2;
+}
+
+/**
+ * Configure a pause in a morse sequence.
+ * 
+ * Does not advance i!
+ */
+void pause(int &i, int wait) {
+  animation_steps[i].mode = animation_step::step_mode::SINGLE;
+  animation_steps[i].duration = wait;
+  animation_steps[i].next = i+1;
+  animation_steps[i].color = strip.Color(0,0,0);
+  // i++; // Don't increment i!
+}
+
+/**
+ * Configure a morse character in animation_steps
+ * 
+ */
+void morse_send(char ch, int &i) {
+  static const char *code_alpha[] = { // Morse Codes "a" to "z"
+    ".-", "-...", "-.-.", "-..", ".", // a-e
+    "..-.", "--.", "....", "..", ".---", // f-j
+    "-.-", ".-..", "--", "-.", "---", // k-o
+    ".--.", "--.-", ".-.", "...", "-" // p-t
+    "..-", "...-", ".--", "-..-", "-.--", "--..", // u-z
+  };
+  static const char*code_digit[] = {
+    "-----", ".----", "..---", "...--", "....-", // 0-4
+    ".....", "-....", "--...", "---..", "----."  // 5-9 
+  };
+  // Morse Pro-signs, see https://en.wikipedia.org/wiki/Prosigns_for_Morse_code
+  static const char* out = ".-.-."; // OUT: pro-sign <AR>, 
+
+  if (isAlpha(ch)) {
+    const char *p = code_alpha[ch - 'a'];
+    while (*p) 
+      dit_da(*p++,i);
+    pause(--i, MORSE_CH_WAIT);
+  } else if (isDigit(ch)){
+    const char *p = code_digit[ch - '0'];
+    while (*p) 
+      dit_da(*p++,i);
+    pause(--i, MORSE_CH_WAIT);
+  } else if (isSpace(ch)) {
+      pause(i, MORSE_WORD_WAIT);
+  } else if (ch == 0) { // <OUT>
+    const char * p = out;
+    while (*p)
+      dit_da(*p++,i);
+    pause(--i, MORSE_TEXT_WAIT);
+    // dump_animation();
+  } /* else {
+    debug("Unknown char");
+  } */
+  animation_steps[i].next = -1;
 }
 
 // State bearing functions -------------------------------------------------
