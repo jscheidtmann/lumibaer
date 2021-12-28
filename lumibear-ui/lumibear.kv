@@ -1,0 +1,234 @@
+#:kivy 1.0
+
+<Lumibear>:
+        AccordionItem:
+                title: 'Single Color'
+                BoxLayout:
+                        orientation: 'vertical'
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.2
+                                Button:
+                                        id: buttonRed
+                                        text: 'Red'
+                                        on_press: root.setColor('FF0000')
+                                Button: 
+                                        id: buttonGreen
+                                        text: 'Green'
+                                        on_press: root.setColor('00FF00')
+                                Button:
+                                        id: buttonBlue
+                                        text: 'Blue'
+                                        on_press: root.setColor('0000FF')
+                        ColorPicker:
+                                id: colorpicker
+                                color: root.colpicker
+                                on_color: 
+                                        root.hex_color = self.hex_color
+                        Button:
+                                id: buttonColor
+                                size_hint_y: 0.2
+                                text: 'Set choosen color!'
+                                on_press: root.setColor()
+        AccordionItem:
+                title: 'Two Colors'
+                BoxLayout:
+                        orientation: 'vertical'
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                ColorPicker:
+                                        id: rot1
+                                        color: root.colpicker
+                                        on_color: root.rot1_color = self.hex_color
+                                ColorPicker:
+                                        id: rot2
+                                        color: root.colpicker
+                                        on_color: root.rot2_color = self.hex_color
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y:0.15
+                                Button:
+                                        text: 'Two!'
+                                        on_press: root.setTwo()
+                                Button:
+                                        text: 'Rotate!'
+                                        on_press: root.setRotate()
+                                Button:
+                                        text: 'Sweep!'
+                                        on_press: root.setSweep()
+                                Button:
+                                        text: 'Wave!'
+                                        on_press: root.setWave()
+        AccordionItem:
+                title: 'Lighthouse'
+                StackLayout:
+                        Button:
+                                text: 'Amrum'
+                                size_hint_x: 0.1
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Fl7.5s')
+                        Button:
+                                text: 'Bake Süderoog'
+                                size_hint_x: 0.22
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('IsoWR6s')
+                        Button:
+                                text: 'Büsum'
+                                size_hint_x: 0.1
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('IsoWR6s')
+                        Button:
+                                text: 'Hörnum (Sylt)'
+                                size_hint_x: 0.18
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Fl(2)9s')
+                        Button:
+                                text: 'Helgoland'
+                                size_hint_x: 0.15
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Fl5s')
+                        Button:
+                                text: 'Helgoland Düne'
+                                size_hint_x: 0.25
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('IsoWRG4s')
+                        Button:
+                                text: 'Kampen'
+                                size_hint_x: 0.12
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('L.FlWR10s')
+                        Button:
+                                text: 'List (Ost)'
+                                size_hint_x: 0.17
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('IsoWRG6s')
+                        Button:
+                                text: 'List (West)'
+                                size_hint_x: 0.17
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('OcWRG6s')
+                        Button:
+                                text: 'Norddorf'
+                                size_hint_x: 0.15
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('OcWRG6s')
+                        Button:
+                                text: 'Nebel'
+                                size_hint_x: 0.1
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('OcWRG5s')
+                        Button:
+                                text: 'Nieblum'
+                                size_hint_x: 0.12
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Oc(2)WRG10s')
+                        Button:
+                                text: 'Nordmarsch'
+                                size_hint_x: 0.17
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('L.Fl(3)WR20s')
+                        Button:
+                                text: 'Oland'
+                                size_hint_x: 0.13
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('FWRG')
+                        Button:
+                                text: 'Olhörn'
+                                size_hint_x: 0.14
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Oc(4)WR10s')
+                        Button:
+                                text: 'Pellworm'
+                                size_hint_x: 0.16
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('OcWR5s')
+                        Button:
+                                text: 'Sankt Peter-Böhl'
+                                size_hint_x: 0.25
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('L.Fl(2)WR15s')
+                        Button: 
+                                text: 'Westerheversand'
+                                size_hint_x: 0.23
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Oc(3)WRG15s')
+                        Button:
+                                text: 'Folkstone (UK)'
+                                size_hint_x: 0.2
+                                size_hint_y: 0.1
+                                on_press: root.setLighthouse('Fl(2)10s')
+        AccordionItem:
+                title: 'Settings'
+                BoxLayout:
+                        orientation: 'vertical'
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.1
+                                Button: 
+                                        id: on
+                                        text: 'On'
+                                        on_press: root.on()
+                                Button:
+                                        id: off
+                                        text: 'Off'
+                                        on_press: root.off()
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.1
+                                Slider:
+                                        size_hint_x: 0.6
+                                        id: brightness
+                                        min: 0
+                                        max: 200
+                                        value: 200
+                                        step: 1
+                                Label: 
+                                        size_hint_x: 0.2 
+                                        text: str(brightness.value)
+                                Button:
+                                        text: 'Set Brightness'
+                                        size_hint_x: 0.2
+                                        on_press: root.setBrightness(brightness.value)
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.1
+                                Slider: 
+                                        size_hint_x: 0.6
+                                        id: rotwait
+                                        min: 100
+                                        max: 2000
+                                        step: 10
+                                        value: 100
+                                Label: 
+                                        size_hint_x: 0.2
+                                        text: str(rotwait.value)
+                                Button:
+                                        text: 'Set Wait'
+                                        size_hint_x: 0.2
+                                        on_press: root.setRotWait(rotwait.value)
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.1
+                                Label: 
+                                        text: 'Address'
+                                TextInput:
+                                        id: ipadress
+                                        text: 'Not implemented yet'
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.1
+                                Label: 
+                                        text: 'Port'
+                                TextInput:
+                                        id: ipport
+                                        text: 'Not implemented yet'
+                        BoxLayout:
+                                orientation: 'horizontal'
+                                size_hint_y: 0.1
+                                Label:
+                                        text: ''
+                                        size_hint_x: 0.9
+                                Button:
+                                        text: 'Quit'
+                                        size_hint_x: 0.1
+                                        on_press: app.stop()
